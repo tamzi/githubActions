@@ -1,0 +1,435 @@
+name: Flutter Build CI
+on:
+  push:
+    paths:
+      - '.github/workflows/**'
+  pull_request:
+    branches:
+      - dev
+      - master
+    paths:
+      - '.github/workflows/**'
+      - 'pubspec.yaml'
+      - 'pubspec.lock'
+      - 'lib/**'
+      - 'ios/**'
+      - 'android/**'
+jobs:
+  # Limits push tp Master branch
+  limit_master_pr:
+    # The type of runner that the job will run on
+    runs-on: ubuntu-latest
+    name: Limit PR to master from any branch
+    steps:
+      - uses: LukBukkit/action-pr-limits@v1
+        with:
+          whitelist: |
+            dev
+
+### Runs Flutter Test
+  # Assumes you ahve tests in your app. If no test the build will fail.
+  # IF no tests, Just remove this block of flutter test and also the
+  #  subsequent lines   needs: [flutter_test] in the various build jobs
+  flutter_test:
+    name: Run flutter test and analyze
+    runs-on: ubuntu-latest
+    # Declare environment variables that you wnat the actions to run against.
+    env:
+      JAVA_VERSION: "11.0"
+      FLUTTER_VERSION: "2.0.0"
+      CHANNEL: "beta"
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-java@v1
+        with:
+          java-version: $
+      - uses: subosito/flutter-action@v1
+        with:
+          # You can also explicitly declare the flutter ve=wersion you want to run your CI on by
+          # replacing channel with:
+          # flutter_version:$
+
+          channel: $
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
+
+# We run the tests first and wait for thyem to pass.
+#  Should the tests fail, they will abandon the proceeding actions
+
+  ### Builds Android App bundles instead of apk
+  android:
+    name: Build Flutter (Android)
+    needs: [flutter_test]
+  # Checks whether tests passed before proceeding.
+    runs-on: ubuntu-latest
+    env:
+      JAVA_VERSION: "11.0"
+      FLUTTER_VERSION: "2.0.0"
+      CHANNEL: "beta"
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-java@v1
+        with:
+          java-version: $
+      - uses: subosito/flutter-action@v1
+        with:
+          channel: $
+      - run: echo "::add-path::$GITHUB_WORKSPACE/_flutter/bin"
+      - run: flutter pub get
+      - run: flutter clean
+      - run: flutter build appbundle
+        working-directory: ./
+
+  ### BUilds IOS ia
+  ios:
+    name: Build Flutter (iOS)
+    needs: [ flutter_test ]
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-java@v1
+        with:
+          java-version: "12.x"
+      - uses: subosito/flutter-action@v1
+        with:
+          channel: "beta"
+      - run: flutter pub get
+      - run: flutter clean
+      - run: flutter build ios --release --no-codesign
+
+  ### Builds web
+  web:
+    name: Build Web
+    needs: [flutter_test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v1
+      - uses: subosito/flutter-action@v1
+        with:
+          channel: "beta"
+      - run: flutter config --enable-web
+      - run: flutter pub get
+      - run: flutter clean
+      - run: flutter build web
+
+ ### Builds windows
+  build_windows:
+    name: Build windows
+    needs: [flutter_test]
+    runs-on: ${{ windowsVersion }}
+    strategy:
+      matrix:
+        windowsVersion: windows-2019
+          TARGET: windows
+      # Disable fail-fast; we want results from all OSes even if one fails.
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v1
+      - uses: subosito/flutter-action@v1
+        with:
+          channel: "beta"
+      - name: Enable desktop support	
+        run: flutter config --enable-windows-desktop	
+      - name: Build example debug	
+        run: |	
+        flutter packages get	
+        flutter build -v ${{matrix.TARGET}} --debug	
+      working-directory: ${{ github.workspace }}/flutter-desktop-embedding/example	
+      - name: Add Flutter to path - Windows
+      if: startsWith(matrix.os, 'windows')
+      run: echo "$env:GITHUB_WORKSPACE\flutter\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Enable desktop support	
+      run: |
+        flutter config --enable-windows-desktop	
+    - name: Doctor
+      # Run doctor, for ease of debugging any issues.
+      run: flutter doctor -v
+    - name: Build testbed debug	
+      run: |	
+        flutter packages get
+        flutter build -v ${{matrix.TARGET}} --debug	
+      working-directory: ${{ github.workspace }}/fde/testbed	 
+     - name: Build testbed release	
+      run: |	
+        flutter packages get	
+        flutter build -v ${{matrix.TARGET}} --release	
+      working-directory: ${{ github.workspace }}/fde/testbed
+    - name: Build file_selector implementations debug	
+      run: |	
+        flutter packages get
+        flutter build -v ${{matrix.TARGET}} --debug	
+      working-directory: ${{ github.workspace }}/fde/plugins/file_selector/example	
+    - name: Build file_selector implementations release	
+      run: |	
+        flutter packages get	
+        flutter build -v ${{matrix.TARGET}} --release	
+      working-directory: ${{ github.workspace }}/fde/plugins/file_selector/example
+
+
+ # build for all desktops
+  build_all_desktops:
+    name: Build all Desktops
+    needs: [flutter_test]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [macOS-10.15, windows-2019, ubuntu-18.04]
+        include: 
+        - os: macOS-10.15
+          TARGET: macos  
+        - os: ubuntu-18.04
+          TARGET: linux     
+        - os: windows-2019
+          TARGET: windows
+      # Disable fail-fast; we want results from all OSes even if one fails.
+      fail-fast: false
+      steps:
+    - uses: actions/checkout@v2	
+      with:
+        path: fde
+    - uses: actions/checkout@v2	
+      with:	
+        path: flutter
+        repository: flutter/flutter	
+        ref: master	
+        # Shallow clones don't work; see https://github.com/flutter/flutter/issues/18532
+        fetch-depth: 0
+    - name: Add Flutter tags
+      # Add tags, which are also necessary for version checks to work.
+      run: git fetch origin +refs/tags/*:refs/tags/*
+      working-directory: ${{ github.workspace }}/flutter
+    - name: Add Flutter to path - Windows
+      if: startsWith(matrix.os, 'windows')
+      run: echo "$env:GITHUB_WORKSPACE\flutter\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+    - name: Add Flutter to path - macOS/Linux
+      if: startsWith(matrix.os, 'macOS') || startsWith(matrix.os, 'ubuntu')
+      run: echo "$GITHUB_WORKSPACE/flutter/bin" >> $GITHUB_PATH
+    - name: Install Linux dependencies	
+      if: startsWith(matrix.os, 'ubuntu')
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libgtk-3-dev libx11-dev pkg-config cmake ninja-build libblkid-dev liblzma-dev
+    - name: Enable desktop support	
+      run: |
+        flutter config --enable-linux-desktop	
+        flutter config --enable-macos-desktop	
+        flutter config --enable-windows-desktop	
+    - name: Doctor
+      # Run doctor, for ease of debugging any issues.
+      run: flutter doctor -v
+    - name: Build testbed debug	
+      run: |	
+        flutter packages get
+        flutter build -v ${{matrix.TARGET}} --debug	
+      working-directory: ${{ github.workspace }}/fde/testbed	
+    - name: Build testbed release	
+      run: |	
+        flutter packages get	
+        flutter build -v ${{matrix.TARGET}} --release	
+      working-directory: ${{ github.workspace }}/fde/testbed
+    - name: Build file_selector implementations debug	
+      run: |	
+        flutter packages get
+        flutter build -v ${{matrix.TARGET}} --debug	
+      working-directory: ${{ github.workspace }}/fde/plugins/file_selector/example	
+    - name: Build file_selector implementations release	
+      run: |	
+        flutter packages get	
+        flutter build -v ${{matrix.TARGET}} --release	
+      working-directory: ${{ github.workspace }}/fde/plugins/file_selector/example
+
+
+# RELEASES
+# To Google Play
+# A 3 step affair [version][buildplaystore] [release]
+  version:
+    name: Create version number
+    runs-on: ubuntu-latest
+    env:
+      JAVA_VERSION: "11.0"
+      FLUTTER_VERSION: "2.0.0"
+      CHANNEL: "beta"
+    steps:
+    - uses: actions/checkout@v1
+    - name: Fetch all history for all tags and branches
+      run: |
+        git config remote.origin.url https://x-access-token:${{ secrets.GH_TOKEN }}@github.com/${{ github.repository }}
+    ## reAD ABOUT THIS IN READme
+        git fetch --prune --depth=10000
+    - name: Install GitVersion
+      uses: gittools/actions/gitversion/setup@v0.9.3
+      with:
+          versionSpec: '5.2.x'
+    - name: Use GitVersion
+      id: gitversion
+      uses: gittools/actions/gitversion/execute@v0.9.3
+    - name: Create version.txt with nuGetVersion
+      run: echo ${{ steps.gitversion.outputs.nuGetVersion  }} > version.txt
+    - name: Upload version.txt
+      uses: actions/upload-artifact@v2
+      with:
+        name: gitversion
+        path: version.txt
+ 
+  buildplaystore:
+    name: Build app bundle and Create release
+    needs: [ android ]
+  # If android build worked, then it is ready, if not probably need to correct
+    runs-on: ubuntu-latest
+    env:
+      JAVA_VERSION: "11.0"
+      FLUTTER_VERSION: "2.0.0"
+      CHANNEL: "beta"
+    steps:
+    - uses: actions/checkout@v1
+    - name: Get version.txt
+      uses: actions/download-artifact@v2
+      with:
+        name: gitversion
+    - name: Create new file without newline char from version.txt
+      run: tr -d '\n' < version.txt > version1.txt
+    - name: Read version
+      id: version
+      uses: juliangruber/read-file-action@v1
+      with:
+        path: version1.txt
+    - name: Update version in YAML
+      run: sed -i 's/99.99.99+99/${{ steps.version.outputs.content }}+${{ github.run_number }}/g' pubspec.yaml
+    - name: Update KeyStore password in gradle properties
+      run: sed -i 's/#{KEYSTORE_PASS}#/${{ secrets.KEYSTORE_PASS }}/g' android/key.properties
+    - name: Update KeyStore key password in gradle properties
+      run: sed -i 's/#{KEYSTORE_KEY_PASS}#/${{ secrets.KEYSTORE_KEY_PASS }}/g' android/key.properties
+    - uses: actions/setup-java@v1
+      with:
+        java-version: $
+    - uses: subosito/flutter-action@v1
+      with:
+        flutter-version: $
+    - run: flutter pub get
+    - run: flutter test
+    - run: flutter build apk --release --split-per-abi
+    - run: flutter build appbundle
+    - name: Create a Release in GitHub
+      uses: ncipollo/release-action@v1
+      with:
+        artifacts: "build/app/outputs/apk/release/*.apk,build/app/outputs/bundle/release/app-release.aab"
+        token: ${{ secrets.GH_TOKEN }}
+        tag: ${{ steps.version.outputs.content }}
+        commit: ${{ github.sha }}
+    - name: Upload app bundle
+      uses: actions/upload-artifact@v2
+      with:
+        name: appbundle
+        path: build/app/outputs/bundle/release/app-release.aab
+  
+  release:
+    name: Release app to internal track
+    needs: [ buildplaystore ]
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v1
+    - name: Get appbundle from artifacts
+      uses: actions/download-artifact@v2
+      with:
+        name: appbundle
+    - name: Release app to internal track
+      uses: r0adkll/upload-google-play@v1
+      with:
+        serviceAccountJsonPlainText: ${{ secrets.PLAYSTORE_ACCOUNT_KEY }}
+       # Change package name
+        packageName: com.tamzi     
+        releaseFile: app-release.aab
+        track: internal
+        whatsNewDirectory: distribution/whatsnew
+
+
+
+### Builds Mac Release
+  ### LEarn how to do this in the readme
+
+  build_mac_desktop:
+    name: On MacOS Deploy
+    needs: [flutter_test]
+    runs-on: macos-latest
+    env:
+      MACOS_APP_RELEASE_PATH: build/macos/Build/Products/Release
+    steps:
+      - uses: actions/checkout@v2
+      - uses: subosito/flutter-action@v1
+        with:
+          channel: dev
+      - name: Enable Macos
+        run: flutter config --enable-macos-desktop
+      - name: Build macOS app
+        run: flutter build macos --release
+      - name: Codesign executable
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+        run: |
+          echo $MACOS_CERTIFICATE | base64 --decode > certificate.p12
+          echo "Create Keychain"
+          security create-keychain -p <YOUR-PASSWORD> build.keychain
+          echo "Assign to Login Keychain"
+          security default-keychain -s build.keychain
+          echo "Unlock the Login Keychain"
+          security unlock-keychain -p <YOUR-PASSWORD> build.keychain
+          echo "Import certificate"
+          security import certificate.p12 -k build.keychain -P $MACOS_CERTIFICATE_PWD -T /usr/bin/codesign
+          echo "Set Key Partition"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k <YOUR-PASSWORD> build.keychain
+          echo "Find Identity"
+          security find-identity
+          echo "Sign the app"
+          /usr/bin/codesign --force --deep -s <IDENTITY-ID> ./$MACOS_APP_RELEASE_PATH/<YOUR-APP-NAME>.app
+      - name: Create a dmg
+        run: |
+          echo "Install create-dmg"
+          brew install create-dmg
+          cd $MACOS_APP_RELEASE_PATH
+          create-dmg \
+            --volname "<YOUR-APP-NAME>" \
+            --window-pos 200 120 \
+            --window-size 800 529 \
+            --icon-size 130 \
+            --text-size 14 \
+            --icon "<YOUR-APP-NAME>.app" 260 250 \
+            --hide-extension "<YOUR-APP-NAME>.app" \
+            --app-drop-link 540 250 \
+            --hdiutil-quiet \
+            "<YOUR-APP-NAME>.dmg" \
+            "<YOUR-APP-NAME>.app"
+      - name: Create Version Number
+        id: versions
+        run: |
+          git fetch
+          VERSION_WITHOUT_SUFFIX="$(grep 'version:' pubspec.yaml | awk '{ print $2 }' | cut -d'+' -f 1)"
+          function parse_git_hash() {
+            git rev-list --count origin/main
+          }
+          MAIN_COUNT=$(parse_git_hash)
+          APP_VERSION="$VERSION_WITHOUT_SUFFIX+$MAIN_COUNT"
+          echo "::set-output name=version::$(echo $APP_VERSION)"
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.versions.outputs.version }}
+          release_name: Release ${{ steps.versions.outputs.version }}
+          body: |
+             Release Notes
+          draft: false
+          prerelease: false
+      - name: Upload Release Asset
+        id: upload-release-asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: build/macos/Build/Products/Release/<YOUR-APP-NAME>.dmg
+          asset_name: <YOUR-APP-NAME>.dmg
+          asset_content_type: application/octet-stream
